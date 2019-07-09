@@ -1,0 +1,17 @@
+name: controller-videos
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - opencv=3.4.2
+  - pip=19.1.1
+  - python=3.7.3
+  - scikit-image=0.15.0
+  - scikit-learn=0.21.3
+  - tqdm=4.32.1
+  - pip:
+    #- efficientnet==0.0.4
+    - keras==2.2.4
+    - MulticoreTSNE==0.1
+    - opencv-contrib-python==4.1.0.25
+    - tensorflow-gpu==1.14.0

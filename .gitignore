@@ -1,0 +1,11 @@
+# Temporary files
+temp/
+
+# PyCharm projects
+.idea/
+
+# Python code compiled to bytecode
+__pycache__/
+
+# Autosaves
+*~
