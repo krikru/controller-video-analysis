@@ -35,8 +35,8 @@ from dataprocessing import process_files
 
 
 # General script behavior
-skip_if_exists = False
-display_plots = True
+skip_if_exists = True
+display_plots = False
 save_plots = True
 create_pngs = True
 create_pdfs = True
@@ -47,6 +47,7 @@ feature_dtype = np.single  # == np.float32 (float becomes np.float64)
 
 # Plotting
 equalize_color_histogram = True
+#use_color_map = False
 display_color_bar = True
 #color_map = 'viridis'
 #color_map = 'jet'
@@ -58,10 +59,7 @@ equalize_size_histogram = True
 mean_size = 1
 
 # t-SNE
-n_jobs = 4
-tsne_kwargs = {
-}
-#n_components = 2
+number_of_jobs = 4
 perplexity = 30.0
 early_exaggeration = 12.0,
 learning_rate = 200.0
@@ -69,9 +67,8 @@ n_iter = 1000
 n_iter_without_progress = 300
 min_grad_norm = 1e-07
 metric = 'euclidean'
-#init = 'random'
+init = 'random'
 #init = 'pca'
-init = 'pca-standardized'
 verbose = 0
 random_state = None
 method = 'barnes_hut'
@@ -138,18 +135,7 @@ def to_range(data, min, max, equalize_histogram=False):
     return min + (data - domain_min) * ((max - min) / (domain_max - domain_min))
 
 
-def create_plots_from_file(file_path, dimensionality, title=None, save_folder=""):
-    with open(file_path, "rb") as file:
-        #components = np.reshape(np.fromfile(file, dtype=feature_dtype), (-1, dimensionality))
-        components = np.reshape(np.fromfile(file, dtype=np.float64), (-1, dimensionality))
-
-    if title is None:
-        title = os.path.basename(file_path)
-
-    create_plots(components, title=title, save_folder=save_folder)
-
-
-def create_plots(data, title="", save_folder=""):
+def create_plots(data, title="", total_variance=None, save_folder=""):
     # Get shape of data
     num_elements, dim = data.shape
 
@@ -161,27 +147,34 @@ def create_plots(data, title="", save_folder=""):
             xprint("Creating directory '{}'".format(save_folder))
             os.makedirs(save_folder)
 
-    for color_map in color_maps:
+    for use_color_map, color_map in [(False, None)] + [(True, color_map) for color_map in color_maps]:
         # Create figure
         fig = plt.figure(figsize=(20, 16))
         fig.canvas.set_window_title(title)
 
         # Create scatter plot of frames as a subplot
         ax = fig.add_subplot(1, 1, 1)
+        ax.set_xlabel("1:st principal component", fontsize=15)
+        ax.set_ylabel("2:nd principal component", fontsize=15)
         ax.set_title(title, fontsize=20)
-        color = np.arange(num_elements)
+        if use_color_map:
+            color = np.arange(num_elements)
+        else:
+            color = (np.column_stack([to_range(data[:, channel + 2], 0, 1, equalize_histogram=equalize_color_histogram)
+                                     for channel in range(3)])
+                     if dim >= 5 else None)
         size = mean_size
         if vary_size and dim >= 6:
             size = mean_size * to_range(data[:, 5], 0, 2, equalize_histogram=equalize_size_histogram)
         the_plot = ax.scatter(data[:, 0], data[:, 1], s=size, c=color, cmap=color_map)
         ax.grid()
-
-        # Display_color_bar:
-        cbar = fig.colorbar(the_plot)
-        cbar.ax.set_ylabel('Frame number')
+        if use_color_map and use_color_map:
+        #if display_color_bar:
+            cbar = fig.colorbar(the_plot)
+            cbar.ax.set_ylabel('Frame number')
 
         if save_folder:
-            image_name = 'scatter_plot{}'.format('_{}'.format(color_map))
+            image_name = 'scatter_plot{}'.format('_color_map' if use_color_map else '')
             if create_pngs:
                 plt.savefig(os.path.join(save_folder, image_name_prefix + image_name) + '.png')
             if create_pdfs:
@@ -193,9 +186,9 @@ def create_plots(data, title="", save_folder=""):
 
 def create_compute_tsne_components_function(input_dim, target_dim, save_folder):
     # Get t-SNE function
-    #tsne = TSNE(n_jobs=4, **tsne_kwargs)
+    tsne = TSNE(n_jobs=4)
     if False:
-        tsne = TSNE(n_jobs=n_jobs,
+        tsne = TSNE(n_jobs=number_of_jobs,
                     n_components=target_dim,
                     perplexity=perplexity,
                     early_exaggeration=early_exaggeration,
@@ -212,20 +205,13 @@ def create_compute_tsne_components_function(input_dim, target_dim, save_folder):
 
     # Create the function which we are interested in
     def compute_tsne_components(in_feature_file_path, out_feature_file_path):
+        xprint("Processing '{}'...".format(in_feature_file_path))
         with open(in_feature_file_path, "rb") as in_feature_file:
             # Read features from file
             features = np.reshape(np.fromfile(in_feature_file, dtype=feature_dtype), (-1, input_dim))
 
-            tsne = TSNE(n_jobs=4,
-                        init=(features[:, 0:2] / np.var(features[:, 0:2], axis=0, keepdims=True) if init == 'pca-standardized' else
-                              features[:, 0:2] if init == 'pca' else
-                              init),
-                        n_iter=1,
-                        **tsne_kwargs)
-
             # Compute t-SNE components
             components = tsne.fit_transform(features)
-            print("components.dtype:", components.dtype)
 
             xprint("features.shape:", features.shape)
             xprint("components.shape:", components.shape)
@@ -240,6 +226,7 @@ def create_compute_tsne_components_function(input_dim, target_dim, save_folder):
                 create_plots(
                     components,
                     title=os.path.basename(in_feature_file_path),
+                    total_variance=np.sum(np.var(features, axis=0)),
                     save_folder=save_folder)
 
     return compute_tsne_components

@@ -38,12 +38,12 @@ from dataprocessing import process_files
 
 
 # General script behavior
-skip_if_exists = True
-display_plots = False
-save_plots = True
+skip_if_exists = False
+display_plots = True
+save_plots = False
 create_pngs = True
 create_pdfs = True
-produce_output_files = True
+produce_output_files = False
 
 # Feature properties
 feature_dtype = np.single  # == np.float32 (float becomes np.float64)
@@ -130,7 +130,7 @@ def to_range(data, min, max, equalize_histogram=False):
 
 def pca_scatter_plot(data, title="", total_variance=None, save_folder=""):
     # Get shape of data
-    num_elements, dim = data.shape
+    num_frames, dim = data.shape
 
     image_name_prefix = None
     if save_folder:
@@ -147,11 +147,11 @@ def pca_scatter_plot(data, title="", total_variance=None, save_folder=""):
 
         # Create scatter plot of frames as a subplot
         ax = fig.add_subplot(1, 1, 1)
-        ax.set_xlabel("1:st principal component", fontsize=15)
-        ax.set_ylabel("2:nd principal component", fontsize=15)
-        ax.set_title(title, fontsize=20)
+        ax.set_xlabel("1:st principal component", fontsize=30)
+        ax.set_ylabel("2:nd principal component", fontsize=30)
+        ax.set_title(title, fontsize=40)
         if use_color_map:
-            color = np.arange(num_elements)
+            color = np.arange(num_frames)
         else:
             color = (np.column_stack([to_range(data[:, channel + 2], 0, 1, equalize_histogram=equalize_color_histogram)
                                      for channel in range(3)])
@@ -196,7 +196,7 @@ def pca_scatter_plot(data, title="", total_variance=None, save_folder=""):
             if comp_idx >= dim:
                 break
             curve = fig.add_subplot(rows, cols, 1 + comp_idx - offset)
-            curve.plot(np.arange(num_elements - kernel_size + 1) + 1 + (kernel_size - 1) / 2,
+            curve.plot(np.arange(num_frames - kernel_size + 1) + 1 + (kernel_size - 1) / 2,
                        np.convolve(data[:, comp_idx], kernel, mode='valid'))
             curve.grid()
             curve.set_title("Principal component #{}".format(comp_idx + 1), fontsize=10)
@@ -219,10 +219,10 @@ def pca_scatter_plot(data, title="", total_variance=None, save_folder=""):
         fig = plt.figure(figsize=(8, 8))
         fig.canvas.set_window_title(title)
 
-        variances = np.var(data, axis=0)
+        variances = np.var(data, axis=0, keepdims=True)
         total_var = np.sum(variances) if total_variance is None else total_variance
         #plt.plot(np.arange(dim) + 1, variances / total_var)
-        plt.plot(np.arange(dim + 1), np.concatenate(([0], np.cumsum(variances))) / total_var)
+        plt.plot(np.arange(dim + 1), np.concatenate(([0], np.cumsum(variances[0]))) / total_var)
         plt.grid(b=True, which='both', axis='both')
         plt.xlabel("Number of principal components used")
         plt.ylabel("Coefficient of determination")
@@ -230,6 +230,32 @@ def pca_scatter_plot(data, title="", total_variance=None, save_folder=""):
 
         if save_folder:
             image_name = 'explainability'
+            if create_pngs:
+                plt.savefig(os.path.join(save_folder, image_name_prefix + image_name + '.png'))
+            if create_pdfs:
+                plt.savefig(os.path.join(save_folder, image_name_prefix + image_name + '.pdf'))
+        if display_plots:
+            plt.show()
+        plt.close(fig)
+
+        # Plot "unexpectedness"
+        fig = plt.figure(figsize=(8, 8))
+        fig.canvas.set_window_title(title)
+
+        kernel_size = 1001
+        assert kernel_size % 2 == 1
+        kernel = np.array([1] * kernel_size) / kernel_size
+
+        epsilon = 1e-6
+        unexpectedness = np.sum(np.square(data) / (variances + epsilon), axis=1)
+        plt.plot(np.arange(num_frames - kernel_size + 1) + 1 + (kernel_size - 1) / 2,
+                 np.convolve(unexpectedness, kernel, mode='valid'))
+        plt.grid(b=True, which='both', axis='both')
+        plt.xlabel("Frame number")
+        plt.ylabel("Unexpectedness")
+
+        if save_folder:
+            image_name = 'unexpectedness'
             if create_pngs:
                 plt.savefig(os.path.join(save_folder, image_name_prefix + image_name + '.png'))
             if create_pdfs:
