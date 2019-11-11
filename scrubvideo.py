@@ -15,7 +15,7 @@ import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 import cv2
-from PySide2.QtCore import Qt, QTimer, Signal, Slot
+from PySide2.QtCore import Qt, Signal, Slot
 from PySide2.QtGui import QImage, QPixmap
 from PySide2.QtWidgets import QWidget, QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QSpacerItem, QFormLayout, QSlider, QLabel, QSizePolicy, QComboBox, QLineEdit
 
@@ -62,9 +62,6 @@ feature_data_type = np.float32
 
 
 pc_dimensionality = 100
-
-pause_between_frames = True
-save_images = False
 
 aspect_ratio = 16.0/9.0
 problem_video_bgr_color = [128, 0, 128]
