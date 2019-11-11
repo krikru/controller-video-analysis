@@ -65,6 +65,7 @@ pc_dimensionality = 100
 
 aspect_ratio = 16.0/9.0
 problem_video_bgr_color = [128, 0, 128]
+display_frame_number = False
 
 time_plot_minimum_height = 200
 
@@ -582,6 +583,24 @@ def get_bgr_frame_of_video(video_capture, target_position, quick=False):
         ret, bgr_frame = video_capture.retrieve()
         if ret:
             # Successfully got frame
+
+            # Print frame number if desired
+            if display_frame_number:
+                # Add text
+                margin = 30
+                text_bottom_left_corner = (margin, bgr_image.shape[0] - margin)
+                for foreground in [False, True]:
+                    cv2.putText(
+                        img=bgr_frame,
+                        text="Frame {}".format(target_position),
+                        org=text_bottom_left_corner,
+                        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                        fontScale=1.5,
+                        color=(255, 255, 255) if foreground else (0, 0, 0),
+                        thickness=2 if foreground else 5,
+                        lineType=2,
+                        bottomLeftOrigin=False)
+
             return bgr_frame
 
     # Failed getting frame
