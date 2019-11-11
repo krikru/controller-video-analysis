@@ -15,7 +15,7 @@ import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 import cv2
-from PySide2.QtCore import Qt, Signal, Slot
+from PySide2.QtCore import Qt, QObject, Signal, Slot, QThread, QMutex, QMutexLocker
 from PySide2.QtGui import QImage, QPixmap
 from PySide2.QtWidgets import QWidget, QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QSpacerItem, QFormLayout, QSlider, QLabel, QSizePolicy, QComboBox, QLineEdit
 
@@ -179,10 +179,102 @@ class Camera:
             self._index_next_video()
 
 
+class SharedImmutableValue(QObject):
+    value_change = Signal()
+
+    def __init__(self, value=None):
+        super().__init__()
+        self._value = value
+        self._mutex = QMutex()
+
+    def get_value(self):
+        with QMutexLocker(self._mutex) as mutex_locker:
+            return self._value
+
+    def set_value(self, value):
+        value_changed = False
+        with QMutexLocker(self._mutex) as mutex_locker:
+            if self._value is not value:
+                self._value = value
+                value_changed = True
+        if value_changed:
+            self.value_change.emit()
+
+
+class SharedValue(QObject):
+    value_change = Signal()
+
+    def __init__(self, value=None):
+        super().__init__()
+        self.value = value
+        self.mutex = QMutex()
+
+    def get_mutex_locker(self):
+        return QMutexLocker(self.mutex)
+
+    # This function is presented as unsafe because it assumes the caller currently has a lock on the mutex
+    def unsafe_set_value(self, value):
+        value_changed = False
+        if self.value is not value:
+            self.value = value
+            value_changed = True
+        if value_changed:
+            self.value_change.emit()
+
+
+class FrameGetterThread(QThread):
+    def __init__(self, bgr_frame, resized_rgb_frame):
+        super().__init__()
+        self.bgr_frame = bgr_frame
+        self.resized_rgb_frame = resized_rgb_frame
+        self.get_new_frame = None
+        self.width = None
+        self.height = None
+        self.camera = None
+        self.frame_number = None
+        self.quick = None
+
+    def get_bgr_frame(self):
+        with self.bgr_frame.get_mutex_locker() as bgr_frame_mutex_locker:
+            if self.frame_number is None or self.camera is None:
+                self.bgr_frame.unsafe_set_value(None)
+            else:
+                self.bgr_frame.unsafe_set_value(self.camera.get_bgr_frame(self.frame_number, quick=self.quick))
+
+    def derive_resized_rgb_frame(self):
+        with self.bgr_frame.get_mutex_locker() as bgr_frame_mutex_locker:
+            if self.bgr_frame.value is None:
+                with self.resized_rgb_frame.get_mutex_locker() as resized_rgb_frame_mutex_locker:
+                    self.resized_rgb_frame.unsafe_set_value(None)
+                return
+
+            # Resize frame
+            bgr_image = cv2.resize(
+                self.bgr_frame.value,
+                (self.width, self.height),
+                interpolation=cv2.INTER_CUBIC if self.width > self.bgr_frame.value.shape[1] else cv2.INTER_AREA)
+
+        # Convert to RGB
+        with self.resized_rgb_frame.get_mutex_locker() as resized_rgb_frame_mutex_locker:
+            self.resized_rgb_frame.unsafe_set_value(cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB))
+
+    def run(self):
+        if self.get_new_frame:
+            self.get_bgr_frame()
+        self.derive_resized_rgb_frame()
+
+
 class FrameViewer(QLabel):
     def __init__(self, aspect_ratio):
         self.camera = None
-        self.bgr_frame = None
+        self.frame_number = None
+        self.quick = None
+        self.bgr_frame = SharedValue()
+        self.resized_rgb_frame = SharedValue()
+        self.resized_rgb_frame.value_change.connect(self.display_resized_rgb_frame)
+        self.frame_getter_thread = FrameGetterThread(self.bgr_frame, self.resized_rgb_frame)
+        self.frame_getter_thread.finished.connect(self.on_frame_getter_finished)
+        self.dirty = False
 
         QLabel.__init__(self)
         # Choose a 16:9 resolution
@@ -196,46 +288,68 @@ class FrameViewer(QLabel):
 
         self.resizeEvent = self.on_resized
 
-    def display_bgr_frame(self, bgr_frame):
-        self.bgr_frame = bgr_frame
-        if self.bgr_frame is None:
-            self.clear()
-            return
+    def derive_resized_rgb_frame(self):
+        if self.frame_getter_thread.isRunning():
+            print("Is now dirty")
+            self.dirty = True
+        else:
+            self.frame_getter_thread.get_new_frame = False
+            self.frame_getter_thread.width = self.width()
+            self.frame_getter_thread.height = self.height()
+            self.frame_getter_thread.start()
 
-        # Resize frame
-        resized_bgr_frame = cv2.resize(
-            self.bgr_frame,
-            (self.width(), self.height()),
-            interpolation=cv2.INTER_CUBIC if self.width() > self.bgr_frame.shape[1] else cv2.INTER_AREA)
+    @Slot()
+    def display_resized_rgb_frame(self):
+        with self.resized_rgb_frame.get_mutex_locker() as resized_rgb_frame_mutex_locker:
+            if self.resized_rgb_frame.value is None:
+                self.clear()
+            else:
+                # Convert to QImage
+                rgb_image = QImage(self.resized_rgb_frame.value,
+                                   self.resized_rgb_frame.value.shape[1],
+                                   self.resized_rgb_frame.value.shape[0],
+                                   self.resized_rgb_frame.value.strides[0],
+                                   QImage.Format_RGB888)
 
-        # Convert to RGB
-        resized_rgb_frame = cv2.cvtColor(resized_bgr_frame, cv2.COLOR_BGR2RGB)
+                # Display QImage
+                self.setPixmap(QPixmap.fromImage(rgb_image))
 
-        # Convert to QImage
-        image = QImage(resized_rgb_frame, resized_rgb_frame.shape[1], resized_rgb_frame.shape[0],
-                       resized_rgb_frame.strides[0], QImage.Format_RGB888)
+    def display_bgr_frame(self):
+        self.derive_resized_rgb_frame()
+        self.display_resized_rgb_frame()
 
-        # Display QImage
-        #pixmap = QPixmap.fromImage(image)
-        #pixmap.detach()
-        #self.setPixmap(pixmap)
-        self.setPixmap(QPixmap.fromImage(image))
+    def display_video_frame(self):
+        if self.frame_getter_thread.isRunning():
+            self.dirty = True
+        else:
+            self.frame_getter_thread.get_new_frame = True
+            self.frame_getter_thread.width = self.width()
+            self.frame_getter_thread.height = self.height()
+            self.frame_getter_thread.camera = self.camera
+            self.frame_getter_thread.frame_number = self.frame_number
+            self.frame_getter_thread.quick = self.quick
+            self.frame_getter_thread.start()
 
     def set_camera(self, camera):
         self.camera = camera
 
     def set_frame_number(self, frame_number, quick=False):
-        if frame_number is None:
-            self.clear()
-        else:
-            self.display_bgr_frame(self.camera.get_bgr_frame(frame_number, quick=quick))
+        self.frame_number = frame_number
+        self.quick = quick
+        self.display_video_frame()
+
 
     def heightForWidth(self, width):
         return round(width / self.aspect_ratio)
 
     def on_resized(self, event):
-        self.display_bgr_frame(self.bgr_frame)
+        self.display_bgr_frame()
 
+    @Slot()
+    def on_frame_getter_finished(self):
+        if self.dirty:
+            self.dirty = False
+            self.display_video_frame()
 
 
 
@@ -465,10 +579,10 @@ def get_bgr_frame_of_video(video_capture, target_position, quick=False):
 
     # Check if the frame number is correct now
     if current_pos == target_position:
-        ret, bgr_image = video_capture.retrieve()
+        ret, bgr_frame = video_capture.retrieve()
         if ret:
             # Successfully got frame
-            return bgr_image
+            return bgr_frame
 
     # Failed getting frame
     return None
